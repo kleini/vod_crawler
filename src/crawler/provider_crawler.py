@@ -284,7 +284,8 @@ class ProviderCrawler:
                 series_title=series_title,
                 series_id=result.series_id,
                 parent_content_id=parent_content_id,
-                entry=entry
+                entry=entry,
+                title_authoritative=detail_series_title is not None
             )
 
             if show_id:
@@ -427,6 +428,7 @@ class ProviderCrawler:
             series_id: Optional[str],
             entry: Dict[str, Any],
             parent_content_id: Optional[str] = None,
+            title_authoritative: bool = False,
     ) -> Optional[str]:
         """
         Get or create a TV show for an episode. Returns the show id (or
@@ -466,6 +468,7 @@ class ProviderCrawler:
             title=series_title,
             provider=provider,
             provider_id=resolved_series_id,
+            title_authoritative=title_authoritative,
             **show_metadata
         )
 

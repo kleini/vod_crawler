@@ -120,6 +120,7 @@ class DatabaseManager:
             title: str,
             provider: str,
             provider_id: str,
+            title_authoritative: bool = False,
             **kwargs
     ) -> Tuple[str, bool]:
         """
@@ -128,6 +129,12 @@ class DatabaseManager:
         episodes to, and returning a bare id sidesteps any risk of a
         DetachedInstanceError if a caller touches a lazily-loaded attribute
         after this session has closed.
+
+        title_authoritative says whether `title` came from a source that
+        really names the series (the per-item detail response) rather than
+        from a fallback to the episode's own name. Only an authoritative
+        title, or one that still normalizes to this row's identity, is
+        allowed to replace an existing title -- see the update branch.
         """
         self._validate_provider(provider)
 
@@ -157,7 +164,18 @@ class DatabaseManager:
                 ).first()
 
             if show:
-                show.title = title
+                # An episode whose feed entry carries no series title falls back
+                # to its own name, so accepting every title here renames the show
+                # after whichever episode was crawled last. The detail fetch that
+                # supplies the real title runs once per episode ever, so on later
+                # crawls that fallback is all there is.
+                if title_authoritative or normalized_title == show.normalized_title:
+                    show.title = title
+                elif title != show.title:
+                    logger.debug(
+                        f"Keeping show title {show.title!r} for {show.id}; "
+                        f"ignoring non-authoritative {title!r}"
+                    )
                 show.last_seen = utcnow()
                 show.is_available = True
 

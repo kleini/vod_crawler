@@ -225,8 +225,9 @@ class ProviderCrawler:
         # Build common metadata from entry
         metadata = self._extract_metadata(entry)
 
-        # Real series title, if the detail fetch can supply one.
+        # Real series title and series id, if the detail fetch can supply them.
         detail_series_title: Optional[str] = None
+        detail_series_id: Optional[str] = None
 
         # Category/listing responses (what we're given here) don't carry
         # the full Pricing object -- only a dedicated per-item detail
@@ -257,6 +258,12 @@ class ProviderCrawler:
                 item_name = detail_entry.get("name") or detail_entry.get("Name")
                 if candidate and candidate != item_name:
                     detail_series_title = candidate
+
+                # ...and the only stable series identifier. parent_content_id
+                # names a single season (season:GN_SEASON_10416816_DE_2025), so
+                # keying shows off it splits every long-running series into one
+                # show per season.
+                detail_series_id = detail_entry.get("series_id") or detail_entry.get("SeriesId")
             else:
                 # Don't mark as checked on failure/empty response -- leave
                 # it to be retried on the next crawl rather than silently
@@ -282,7 +289,7 @@ class ProviderCrawler:
             show_id = self._get_or_create_show(
                 provider=provider,
                 series_title=series_title,
-                series_id=result.series_id,
+                series_id=detail_series_id or result.series_id,
                 parent_content_id=parent_content_id,
                 entry=entry
             )
@@ -436,10 +443,11 @@ class ProviderCrawler:
         the session lifecycle correctly.
 
         series_id (from classification) is often null at the item level
-        (e.g. RTL+ never populates it on the clip itself) -- prefer
-        parent_content_id, the content_id of the category/program folder
-        the episode was fetched under, which is the actual stable series
-        identifier in that case.
+        (e.g. RTL+ never populates it on the clip itself); callers pass the
+        series_id from the detail response instead where they have one, since
+        that is stable across seasons. parent_content_id is the last resort:
+        it identifies a single season, not the series, so keying shows off it
+        creates one show per season for anything long-running.
         """
         if not series_title:
             logger.warning(f"No series title for episode {entry.get('id', 'unknown')}")

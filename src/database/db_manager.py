@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 from contextlib import contextmanager
 
-from sqlalchemy import create_engine, text, distinct, exists, tuple_, func
+from sqlalchemy import create_engine, text, distinct, exists, tuple_, func, inspect
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import sessionmaker, Session, scoped_session, joinedload
 from sqlalchemy.exc import IntegrityError
@@ -86,6 +86,7 @@ class DatabaseManager:
 
     def _init_db(self):
         Base.metadata.create_all(self.engine)
+        self._migrate_schema()
         with self.engine.connect() as conn:
             conn.execute(text("PRAGMA journal_mode=WAL"))
             conn.execute(text("PRAGMA synchronous=NORMAL"))
@@ -93,6 +94,60 @@ class DatabaseManager:
             conn.execute(text("PRAGMA mmap_size=268435456"))  # 256MB
             conn.execute(text("PRAGMA foreign_keys=ON"))
             conn.commit()
+
+    def _migrate_schema(self) -> None:
+        """
+        Bring an existing SQLite file up to date with the ORM models.
+
+        Base.metadata.create_all() only creates *missing tables*; it never
+        adds columns or indexes to a table that already exists. A database
+        created by an older version therefore lacks newer columns (e.g.
+        pricing_checked) and every ORM query selecting them fails with
+        "no such column". This adds any missing columns (additive only --
+        nothing is dropped or altered) and any missing indexes.
+
+        NOT NULL columns are only addable in SQLite with a constant
+        default, so those need a server_default on the model (as
+        pricing_checked has); otherwise we log and skip rather than fail.
+        """
+        insp = inspect(self.engine)
+        for table in Base.metadata.sorted_tables:
+            if not insp.has_table(table.name):
+                continue
+            existing = {c["name"] for c in insp.get_columns(table.name)}
+            for col in table.columns:
+                if col.name in existing:
+                    continue
+                if col.primary_key or col.unique:
+                    logger.error(
+                        f"Cannot auto-migrate {table.name}.{col.name} "
+                        f"(primary key/unique) -- manual migration needed"
+                    )
+                    continue
+                default_sql = ""
+                if col.server_default is not None:
+                    default_sql = f" DEFAULT {col.server_default.arg.text}" \
+                        if hasattr(col.server_default.arg, "text") \
+                        else f" DEFAULT {col.server_default.arg!r}"
+                if not col.nullable and not default_sql:
+                    logger.error(
+                        f"Cannot auto-migrate NOT NULL column {table.name}.{col.name} "
+                        f"without server_default -- manual migration needed"
+                    )
+                    continue
+                col_type = col.type.compile(dialect=self.engine.dialect)
+                null_sql = "" if col.nullable else " NOT NULL"
+                ddl = (
+                    f'ALTER TABLE "{table.name}" ADD COLUMN '
+                    f'"{col.name}" {col_type}{null_sql}{default_sql}'
+                )
+                with self.engine.begin() as conn:
+                    conn.execute(text(ddl))
+                logger.info(f"Schema migration: added {table.name}.{col.name}")
+
+            # create_all() also skips indexes of pre-existing tables.
+            for index in table.indexes:
+                index.create(self.engine, checkfirst=True)
 
     @contextmanager
     def session(self) -> Session:

@@ -122,6 +122,7 @@ async def export_library_stream(
 async def get_movies(
     provider: Optional[str] = Query(None, description="Filter by provider"),
     include_priced: bool = Query(False, description="Include priced content; default only free/unknown-priced content"),
+    q: Optional[str] = Query(None, max_length=100, description="Case-insensitive title search"),
     limit: int = Query(100, ge=1, le=1000, description="Items per page"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     db: DatabaseManager = Depends(get_db),
@@ -139,6 +140,11 @@ async def get_movies(
                 (Movie.pricing_access_type.is_(None)) |
                 (Movie.pricing_access_type.in_(FREE_ACCESS_TYPES))
             )
+
+        if q and q.strip():
+            # Escape LIKE wildcards so "100%" / "a_b" are searched literally.
+            needle = q.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            query = query.filter(Movie.title.ilike(f"%{needle}%", escape="\\"))
 
         total = query.count()
         movies = query.order_by(Movie.title).limit(limit).offset(offset).all()
